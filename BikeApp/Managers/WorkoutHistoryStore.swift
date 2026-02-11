@@ -8,6 +8,11 @@ struct WorkoutRecord: Identifiable, Codable {
     let endDate: Date
     let distanceMeters: Double
     let elapsedSeconds: TimeInterval
+    let trackId: UUID?
+    let trackName: String?
+    let trackDistanceKm: Double?
+    let trackProgressMeters: Double?
+    let trackCompleted: Bool?
 }
 
 @MainActor
@@ -21,14 +26,27 @@ final class WorkoutHistoryStore: ObservableObject {
         load()
     }
 
-    func add(summary: WorkoutSummary, profileId: UUID) {
+    func add(
+        summary: WorkoutSummary,
+        profileId: UUID,
+        trackId: UUID? = nil,
+        trackName: String? = nil,
+        trackDistanceKm: Double? = nil,
+        trackProgressMeters: Double? = nil,
+        trackCompleted: Bool? = nil
+    ) {
         let record = WorkoutRecord(
             id: UUID(),
             profileId: profileId,
             startDate: summary.startDate,
             endDate: summary.endDate,
             distanceMeters: summary.distanceMeters,
-            elapsedSeconds: summary.elapsedSeconds
+            elapsedSeconds: summary.elapsedSeconds,
+            trackId: trackId,
+            trackName: trackName,
+            trackDistanceKm: trackDistanceKm,
+            trackProgressMeters: trackProgressMeters,
+            trackCompleted: trackCompleted
         )
         workouts.insert(record, at: 0)
         save()
@@ -120,6 +138,7 @@ final class ProfileStore: ObservableObject {
             createdAt: Date()
         )
         profiles.append(profile)
+        profiles = sortProfiles(profiles)
         save()
     }
 
@@ -185,6 +204,15 @@ final class ProfileStore: ObservableObject {
             UserDefaults.standard.set(activeProfileId.uuidString, forKey: activeProfileKey)
         } else {
             UserDefaults.standard.removeObject(forKey: activeProfileKey)
+        }
+    }
+
+    private func sortProfiles(_ profiles: [Profile]) -> [Profile] {
+        profiles.sorted { lhs, rhs in
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt < rhs.createdAt
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
     }
 

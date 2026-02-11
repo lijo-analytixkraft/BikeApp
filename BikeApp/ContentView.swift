@@ -2,140 +2,266 @@ import Combine
 import SwiftUI
 import UIKit
 
-enum AppSection: String, CaseIterable, Identifiable {
-    case workout
-    case history
-    case profiles
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .workout:
-            return "Workout"
-        case .history:
-            return "History"
-        case .profiles:
-            return "Profiles"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .workout:
-            return "bicycle"
-        case .history:
-            return "clock"
-        case .profiles:
-            return "person.2"
-        }
-    }
-}
-
 struct ContentView: View {
     @StateObject private var bluetooth = BluetoothManager()
     @StateObject private var workout = WorkoutSession()
     @StateObject private var healthKit = HealthKitManager()
-    @StateObject private var historyStore = WorkoutHistoryStore()
     @ObservedObject var profileStore: ProfileStore
+    @ObservedObject var historyStore: WorkoutHistoryStore
 
     private let healthKitWritesEnabled = false
 
     @AppStorage("distanceUnit") private var distanceUnit: String = "km"
     @AppStorage("useTransparentUI") private var useTransparentUI: Bool = true
 
-    @State private var selection: AppSection? = .workout
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var showSetup = true
+    @State private var selectedTrack: VirtualTrack?
+    @State private var showTrackPicker = false
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            List(selection: $selection) {
-                Section {
-                    ForEach(AppSection.allCases) { section in
-                        Label(section.title, systemImage: section.systemImage)
-                            .tag(section as AppSection?)
-                    }
-                }
-                Section("Appearance") {
-                    Toggle("Transparent UI", isOn: $useTransparentUI)
-                }
-                Section("Active Profile") {
-                    ActiveProfileRow(profile: profileStore.activeProfile)
-                        .allowsHitTesting(false)
-                }
-                Section("Connection") {
-                    ConnectionStatusRow(isConnected: bluetooth.isConnected)
-                        .allowsHitTesting(false)
-                }
-            }
-            .listStyle(.sidebar)
-            .navigationTitle("BikeApp")
-        } detail: {
-            switch selection {
-            case .workout:
-                if let activeProfile = profileStore.activeProfile {
-                    WorkoutDashboardView(
-                        bluetooth: bluetooth,
-                        workout: workout,
-                        healthKit: healthKit,
-                        historyStore: historyStore,
-                        distanceUnit: $distanceUnit,
-                        healthKitWritesEnabled: healthKitWritesEnabled,
-                        activeProfileId: activeProfile.id,
-                        activeProfileName: activeProfile.name,
-                        activeProfileInitials: activeProfile.initials,
-                        activeProfileColorHex: activeProfile.colorHex ?? RideTheme.accentHex,
-                        targetDistanceKm: activeProfile.targetDistanceKm,
-                        profiles: profileStore.profiles,
-                        onSelectProfile: { profile in
-                            profileStore.setActiveProfile(profile)
-                        },
-                        onAddProfile: { name in
-                            profileStore.addProfile(name: name)
-                        },
-                        onUpdateTargetDistance: { targetKm in
+        ZStack {
+            CyclingBackground()
+            if showSetup || profileStore.activeProfile == nil {
+                SetupView(
+                    profiles: profileStore.profiles,
+                    activeProfile: profileStore.activeProfile,
+                    selectedTrack: selectedTrack,
+                    targetDistanceKm: profileStore.activeProfile?.targetDistanceKm,
+                    onSelectProfile: { profile in
+                        profileStore.setActiveProfile(profile)
+                    },
+                    onAddProfile: { name in
+                        profileStore.addProfile(name: name)
+                    },
+                    onUpdateTargetDistance: { targetKm in
+                        if let activeProfile = profileStore.activeProfile {
                             profileStore.updateProfileTargetDistance(id: activeProfile.id, targetKm: targetKm)
                         }
-                    )
-                } else {
-                    ProfileSelectionView(
-                        store: profileStore,
-                        selectionRequired: true
-                    )
-                }
-            case .history:
-                HistoryView(store: historyStore, distanceUnit: distanceUnit, activeProfile: profileStore.activeProfile)
-            case .profiles:
-                ProfileSelectionView(
-                    store: profileStore,
-                    selectionRequired: false
+                    },
+                    onSelectTrack: { showTrackPicker = true },
+                    onClearTrack: { selectedTrack = nil },
+                    onStart: {
+                        showSetup = false
+                    }
                 )
-            case .none:
-                ContentUnavailableView("Select a section", systemImage: "sidebar.left")
+            } else if let activeProfile = profileStore.activeProfile {
+                WorkoutDashboardView(
+                    bluetooth: bluetooth,
+                    workout: workout,
+                    healthKit: healthKit,
+                    historyStore: historyStore,
+                    distanceUnit: $distanceUnit,
+                    healthKitWritesEnabled: healthKitWritesEnabled,
+                    activeProfileId: activeProfile.id,
+                    activeProfileName: activeProfile.name,
+                    activeProfileInitials: activeProfile.initials,
+                    activeProfileColorHex: activeProfile.colorHex ?? RideTheme.accentHex,
+                    targetDistanceKm: activeProfile.targetDistanceKm,
+                    profiles: profileStore.profiles,
+                    onSelectProfile: { profile in
+                        profileStore.setActiveProfile(profile)
+                    },
+                    onAddProfile: { name in
+                        profileStore.addProfile(name: name)
+                    },
+                    onUpdateTargetDistance: { targetKm in
+                        profileStore.updateProfileTargetDistance(id: activeProfile.id, targetKm: targetKm)
+                    },
+                    selectedTrack: $selectedTrack,
+                    onShowTrackPicker: { showTrackPicker = true },
+                    onExitToSetup: {
+                        showSetup = true
+                    }
+                )
             }
+        }
+        .sheet(isPresented: $showTrackPicker) {
+            TrackPickerSheet(
+                tracks: VirtualTrackCatalog.tracks,
+                selectedTrackId: selectedTrack?.id,
+                onSelect: { track in
+                    selectedTrack = track
+                }
+            )
         }
         .onAppear {
             RideTheme.surfaceOpacity = useTransparentUI ? 0 : 1
+            if !workout.isActive {
+                showSetup = true
+            }
         }
         .onChange(of: useTransparentUI) { _, newValue in
             RideTheme.surfaceOpacity = newValue ? 0 : 1
         }
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button {
-                    toggleSidebar()
-                } label: {
-                    Image(systemName: "sidebar.left")
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                if !workout.isActive {
+                    showSetup = true
                 }
-                .accessibilityLabel("Toggle Sidebar")
+            }
+        }
+    }
+}
+
+private struct SetupView: View {
+    let profiles: [Profile]
+    let activeProfile: Profile?
+    let selectedTrack: VirtualTrack?
+    let targetDistanceKm: Double?
+    let onSelectProfile: (Profile) -> Void
+    let onAddProfile: (String) -> Void
+    let onUpdateTargetDistance: (Double?) -> Void
+    let onSelectTrack: () -> Void
+    let onClearTrack: () -> Void
+    let onStart: () -> Void
+
+    @State private var showAddProfile = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+            let contentWidth = min(size.width * 0.92, 1100)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Ride Setup")
+                            .font(.system(size: 26, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text("Choose your profile and target before you ride. Track is optional.")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    profileSection
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("TARGET")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        TargetDistanceBar(
+                            targetDistanceKm: targetDistanceKm,
+                            canEdit: activeProfile != nil,
+                            onUpdateTargetDistance: onUpdateTargetDistance
+                        )
+                        if activeProfile == nil {
+                            Text("Select a profile to set a target distance.")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("TRACK")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        VirtualTrackCard(
+                            track: selectedTrack,
+                            speedKph: 0,
+                            progressMeters: 0,
+                            canEdit: true,
+                            onSelect: onSelectTrack,
+                            onClear: onClearTrack
+                        )
+                    }
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(startHint)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            onStart()
+                        } label: {
+                            Text("Enter Workout")
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 10)
+                                .background(
+                                    Capsule()
+                                        .fill(canStart ? RideTheme.accent : RideTheme.accent.opacity(0.3))
+                                )
+                        }
+                        .disabled(!canStart)
+                    }
+                }
+                .frame(maxWidth: contentWidth, alignment: .leading)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, max(24, size.width * 0.04))
+                .padding(.vertical, max(24, size.height * 0.04))
+            }
+        }
+        .sheet(isPresented: $showAddProfile) {
+            ProfileEditorSheet(
+                title: "New Profile",
+                initialName: "",
+                onSave: { name in
+                    onAddProfile(name)
+                }
+            )
+        }
+    }
+
+    private var profileSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("PROFILE")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    showAddProfile = true
+                } label: {
+                    Text("Add")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(RideTheme.surface(RideTheme.accent, opacity: 0.2))
+                        )
+                }
+            }
+
+            if profiles.isEmpty {
+                Text("No profiles yet. Add one to begin.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(profiles) { profile in
+                        Button {
+                            onSelectProfile(profile)
+                        } label: {
+                            ProfileRow(
+                                profile: profile,
+                                isActive: profile.id == activeProfile?.id
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
     }
 
-    private func toggleSidebar() {
-        withAnimation {
-            columnVisibility = columnVisibility == .all ? .detailOnly : .all
+    private var canStart: Bool {
+        activeProfile != nil
+    }
+
+    private var startHint: String {
+        if activeProfile == nil {
+            return "Pick a profile to continue."
         }
+        if selectedTrack == nil {
+            return "No track selected. You can still start a workout."
+        }
+        return "All set. Enter the workout screen."
     }
 }
 
@@ -155,12 +281,16 @@ struct WorkoutDashboardView: View {
     let onSelectProfile: (Profile) -> Void
     let onAddProfile: (String) -> Void
     let onUpdateTargetDistance: (Double?) -> Void
+    @Binding var selectedTrack: VirtualTrack?
+    let onShowTrackPicker: () -> Void
+    let onExitToSetup: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var saveInProgress = false
     @State private var actionMessage: String = ""
-    @State private var startDistanceMeters: Double = 0
+    @State private var workoutStartDistanceMeters: Double = 0
     @State private var autoStopTriggered = false
+    @State private var trackStartDistanceMeters: Double = 0
 
     var body: some View {
         ZStack {
@@ -177,7 +307,9 @@ struct WorkoutDashboardView: View {
                 onAddProfile: onAddProfile,
                 workoutState: workoutState,
                 speedText: speedText,
+                speedKph: workout.speedKph,
                 cadenceText: cadenceText,
+                distanceTitle: distanceMetricTitle,
                 distanceText: distanceText,
                 elapsedText: timeText,
                 avgSpeedText: avgSpeedText,
@@ -186,10 +318,17 @@ struct WorkoutDashboardView: View {
                 targetDistanceKm: targetDistanceKm,
                 canEditTargetDistance: !workout.isActive,
                 onUpdateTargetDistance: onUpdateTargetDistance,
-                isConnected: bluetooth.isConnected,
-                speedSamples: workout.speedSamples,
-                isActive: workout.isActive,
-                isPaused: workout.isPaused,
+                track: selectedTrack,
+                    trackProgressMeters: trackProgressMeters,
+                    canEditTrack: false,
+                    onSelectTrack: onShowTrackPicker,
+                    onClearTrack: clearTrackSelection,
+                    canExitToSetup: !workout.isActive,
+                    onExitToSetup: onExitToSetup,
+                    isConnected: bluetooth.isConnected,
+                    speedSamples: workout.speedSamples,
+                    isActive: workout.isActive,
+                    isPaused: workout.isPaused,
                 onStart: startOrResume,
                 onPause: pauseWorkout,
                 onStop: stopWorkout
@@ -200,6 +339,10 @@ struct WorkoutDashboardView: View {
         }
         .onReceive(workout.$distanceMeters) { distanceMeters in
             checkAutoStop(distanceMeters: distanceMeters)
+        }
+        .onChange(of: selectedTrack?.id) { _, _ in
+            trackStartDistanceMeters = workout.distanceMeters
+            autoStopTriggered = false
         }
         .onAppear {
             updateIdleTimer()
@@ -236,8 +379,19 @@ struct WorkoutDashboardView: View {
     }
 
     private var distanceText: String {
-        let km = workout.distanceMeters / 1000.0
-        return String(format: "%.2f", km)
+        let riddenKm = workout.distanceMeters / 1000.0
+        guard let targetDistanceKm, targetDistanceKm > 0 else {
+            return String(format: "%.2f", riddenKm)
+        }
+        let remainingKm = max(targetDistanceKm - riddenKm, 0)
+        return String(format: "%.2f", remainingKm)
+    }
+
+    private var distanceMetricTitle: String {
+        guard let targetDistanceKm, targetDistanceKm > 0 else {
+            return "Distance"
+        }
+        return "Remaining"
     }
 
     private var speedText: String {
@@ -263,6 +417,19 @@ struct WorkoutDashboardView: View {
         return String(format: "%.2f", km)
     }
 
+    private var trackProgressMeters: Double {
+        guard selectedTrack != nil else { return 0 }
+        return max(0, workout.distanceMeters - trackStartDistanceMeters)
+    }
+
+    private var autoStopDistanceKm: Double? {
+        selectedTrack?.distanceKm ?? targetDistanceKm
+    }
+
+    private var autoStopBaselineMeters: Double {
+        selectedTrack == nil ? workoutStartDistanceMeters : trackStartDistanceMeters
+    }
+
     private var workoutState: WorkoutState {
         if workout.isPaused {
             return .paused
@@ -282,21 +449,20 @@ struct WorkoutDashboardView: View {
             return
         }
         autoStopTriggered = false
-        startDistanceMeters = workout.distanceMeters
         if healthKitWritesEnabled {
             if healthKit.isAuthorized {
-                workout.start()
+                beginWorkout()
             } else {
                 healthKit.requestAuthorization { success in
                     if success {
-                        workout.start()
+                        beginWorkout()
                     } else {
                         actionMessage = "Health permission required to save workout"
                     }
                 }
             }
         } else {
-            workout.start()
+            beginWorkout()
         }
     }
 
@@ -307,31 +473,61 @@ struct WorkoutDashboardView: View {
     private func stopWorkout() {
         guard let summary = workout.stop() else { return }
         autoStopTriggered = false
-        historyStore.add(summary: summary, profileId: activeProfileId)
+        let trackProgress = selectedTrack.map { _ in
+            max(0, summary.distanceMeters - trackStartDistanceMeters)
+        }
+        let trackCompleted = selectedTrack.map { track in
+            guard let trackProgress else { return false }
+            return trackProgress >= (track.distanceMeters - 0.5)
+        }
+        historyStore.add(
+            summary: summary,
+            profileId: activeProfileId,
+            trackId: selectedTrack?.id,
+            trackName: selectedTrack?.name,
+            trackDistanceKm: selectedTrack?.distanceKm,
+            trackProgressMeters: trackProgress,
+            trackCompleted: trackCompleted
+        )
         if healthKitWritesEnabled {
             saveInProgress = true
+            let completionLabel = trackCompleted == true ? "Track complete" : "Workout complete"
             healthKit.saveWorkout(
                 startDate: summary.startDate,
                 endDate: summary.endDate,
                 distanceMeters: summary.distanceMeters
             ) { success in
                 saveInProgress = false
-                actionMessage = success ? "Workout saved" : "Workout save failed"
+                actionMessage = success ? "\(completionLabel) saved" : "\(completionLabel) save failed"
             }
         } else {
-            actionMessage = "Workout complete (Health save disabled)"
+            actionMessage = trackCompleted == true ? "Track complete (Health save disabled)" : "Workout complete (Health save disabled)"
         }
+        onExitToSetup()
     }
 
     private func checkAutoStop(distanceMeters: Double) {
         guard workout.isActive, !autoStopTriggered else { return }
-        guard let targetDistanceKm, targetDistanceKm > 0 else { return }
-        let targetMeters = targetDistanceKm * 1000.0
-        let traveledMeters = max(0, distanceMeters - startDistanceMeters)
+        guard let autoStopDistanceKm, autoStopDistanceKm > 0 else { return }
+        let targetMeters = autoStopDistanceKm * 1000.0
+        let traveledMeters = max(0, distanceMeters - autoStopBaselineMeters)
         if traveledMeters >= targetMeters {
             autoStopTriggered = true
             stopWorkout()
         }
+    }
+
+    private func beginWorkout() {
+        workout.start()
+        workoutStartDistanceMeters = workout.distanceMeters
+        if selectedTrack != nil {
+            trackStartDistanceMeters = workout.distanceMeters
+        }
+    }
+
+    private func clearTrackSelection() {
+        selectedTrack = nil
+        autoStopTriggered = false
     }
 
     private func updateIdleTimer() {
@@ -351,7 +547,9 @@ private struct RideDashboardView: View {
     let onAddProfile: (String) -> Void
     let workoutState: WorkoutState
     let speedText: String
+    let speedKph: Double
     let cadenceText: String
+    let distanceTitle: String
     let distanceText: String
     let elapsedText: String
     let avgSpeedText: String
@@ -360,6 +558,13 @@ private struct RideDashboardView: View {
     let targetDistanceKm: Double?
     let canEditTargetDistance: Bool
     let onUpdateTargetDistance: (Double?) -> Void
+    let track: VirtualTrack?
+    let trackProgressMeters: Double
+    let canEditTrack: Bool
+    let onSelectTrack: () -> Void
+    let onClearTrack: () -> Void
+    let canExitToSetup: Bool
+    let onExitToSetup: () -> Void
     let isConnected: Bool
     let speedSamples: [SpeedSample]
     let isActive: Bool
@@ -372,55 +577,66 @@ private struct RideDashboardView: View {
         GeometryReader { proxy in
             let size = proxy.size
             let contentWidth = min(size.width * 0.92, 1200)
+            let verticalSpacing: CGFloat = size.height < 880 ? 14 : 20
+            let verticalPadding = max(16, size.height * 0.03)
 
-            VStack(spacing: 24) {
-                TopBar(
-                    appName: appName,
-                    profileName: profileName,
-                    profileInitials: profileInitials,
-                    profileColorHex: profileColorHex,
-                    activeProfileId: activeProfileId,
-                    profiles: profiles,
-                    canChangeProfile: canChangeProfile,
-                    onSelectProfile: onSelectProfile,
-                    onAddProfile: onAddProfile,
-                    workoutState: workoutState,
-                    isConnected: isConnected
-                )
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: verticalSpacing) {
+                    TopBar(
+                        appName: appName,
+                        profileName: profileName,
+                        profileInitials: profileInitials,
+                        profileColorHex: profileColorHex,
+                        activeProfileId: activeProfileId,
+                        profiles: profiles,
+                        canChangeProfile: canChangeProfile,
+                        onSelectProfile: onSelectProfile,
+                        onAddProfile: onAddProfile,
+                        workoutState: workoutState,
+                        isConnected: isConnected
+                    )
 
-                MetricsRow(
-                    speedText: speedText,
-                    cadenceText: cadenceText,
-                    distanceText: distanceText,
-                    elapsedText: elapsedText
-                )
+                    MetricsRow(
+                        speedText: speedText,
+                        cadenceText: cadenceText,
+                        distanceTitle: distanceTitle,
+                        distanceText: distanceText,
+                        elapsedText: elapsedText
+                    )
 
-                TargetDistanceBar(
-                    targetDistanceKm: targetDistanceKm,
-                    canEdit: canEditTargetDistance,
-                    onUpdateTargetDistance: onUpdateTargetDistance
-                )
+                    VirtualTrackCard(
+                        track: track,
+                        speedKph: speedKph,
+                        progressMeters: trackProgressMeters,
+                        canEdit: canEditTrack,
+                        onSelect: onSelectTrack,
+                        onClear: onClearTrack
+                    )
 
-                ControlRow(
-                    isActive: isActive,
-                    isPaused: isPaused,
-                    onStart: onStart,
-                    onPause: onPause,
-                    onStop: onStop
-                )
+                    ControlRow(
+                        isActive: isActive,
+                        isPaused: isPaused,
+                        canExitToSetup: canExitToSetup,
+                        onStart: onStart,
+                        onPause: onPause,
+                        onStop: onStop,
+                        onExitToSetup: onExitToSetup
+                    )
 
-                GraphSection(speedSamples: speedSamples)
+                    GraphSection(speedSamples: speedSamples)
 
-                BottomBar(
-                    avgSpeedText: avgSpeedText,
-                    maxSpeedText: maxSpeedText,
-                    totalDistanceText: totalDistanceText
-                )
+                    BottomBar(
+                        avgSpeedText: avgSpeedText,
+                        maxSpeedText: maxSpeedText,
+                        totalDistanceText: totalDistanceText
+                    )
+                }
+                .frame(maxWidth: contentWidth)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, max(24, size.width * 0.04))
+                .padding(.vertical, verticalPadding)
             }
-            .frame(maxWidth: contentWidth)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, max(24, size.width * 0.04))
-            .padding(.vertical, max(24, size.height * 0.04))
         }
     }
 }
@@ -479,6 +695,7 @@ private struct TopBar: View {
 private struct MetricsRow: View {
     let speedText: String
     let cadenceText: String
+    let distanceTitle: String
     let distanceText: String
     let elapsedText: String
 
@@ -499,7 +716,7 @@ private struct MetricsRow: View {
             )
 
             MetricCard(
-                title: "Distance",
+                title: distanceTitle,
                 value: distanceText,
                 unit: "km",
                 isPrimary: false
@@ -685,35 +902,63 @@ private struct MetricCard: View {
 private struct ControlRow: View {
     let isActive: Bool
     let isPaused: Bool
+    let canExitToSetup: Bool
     let onStart: () -> Void
     let onPause: () -> Void
     let onStop: () -> Void
+    let onExitToSetup: () -> Void
 
     var body: some View {
-        HStack(spacing: 28) {
-            CircularControlButton(
-                systemName: "play.fill",
-                color: Color.green,
-                isEnabled: !isActive || isPaused,
-                label: isPaused ? "Resume" : "Start",
-                action: onStart
-            )
+        ZStack {
+            HStack(spacing: 28) {
+                CircularControlButton(
+                    systemName: "play.fill",
+                    color: Color.green,
+                    isEnabled: !isActive || isPaused,
+                    label: isPaused ? "Resume" : "Start",
+                    action: onStart
+                )
 
-            CircularControlButton(
-                systemName: "pause.fill",
-                color: Color.orange,
-                isEnabled: isActive && !isPaused,
-                label: "Pause",
-                action: onPause
-            )
+                CircularControlButton(
+                    systemName: "pause.fill",
+                    color: Color.orange,
+                    isEnabled: isActive && !isPaused,
+                    label: "Pause",
+                    action: onPause
+                )
 
-            CircularControlButton(
-                systemName: "stop.fill",
-                color: Color.red,
-                isEnabled: isActive,
-                label: "Stop",
-                action: onStop
-            )
+                CircularControlButton(
+                    systemName: "stop.fill",
+                    color: Color.red,
+                    isEnabled: isActive,
+                    label: "Stop",
+                    action: onStop
+                )
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            HStack {
+                Spacer(minLength: 0)
+                if canExitToSetup {
+                    Button {
+                        onExitToSetup()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.backward.circle")
+                                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                            Text("Exit")
+                                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        }
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule()
+                                    .fill(RideTheme.surface(RideTheme.card, opacity: 0.9))
+                            )
+                    }
+                }
+            }
         }
         .padding(.vertical, 8)
     }
@@ -748,113 +993,231 @@ private struct GraphSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Speed")
+            Text("Speed + Cadence")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)
 
             VStack(spacing: 12) {
-                SpeedLineGraph(samples: speedSamples)
-                    .frame(height: 120)
+                SpeedCadenceGraph(samples: speedSamples)
+                    .frame(height: 140)
 
-                SpeedHeatMap(samples: speedSamples)
-                    .frame(height: 12)
+                CadenceLegendRow()
             }
             .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(RideTheme.card)
-        )
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(RideTheme.card)
+            )
         }
     }
 }
 
-private struct SpeedLineGraph: View {
+private struct SpeedCadenceGraph: View {
     let samples: [SpeedSample]
 
     var body: some View {
         GeometryReader { proxy in
-            let size = proxy.size
-            let speeds = samples.map(\.speedKph)
+            let chartSamples = tenSecondBuckets(from: samples)
+            let speeds = chartSamples.map(\.speedKph)
+            let cadences = chartSamples.map(\.cadenceRpm)
             let maxSpeed = max(speeds.max() ?? 0, 1)
+            let maxCadence = max(cadences.max() ?? 0, 120)
 
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(RideTheme.track.opacity(0.6), lineWidth: 1)
 
-                if samples.count >= 2 {
-                    Path { path in
-                        for (index, speed) in speeds.enumerated() {
-                            let x = size.width * CGFloat(index) / CGFloat(max(speeds.count - 1, 1))
-                            let y = size.height - (CGFloat(speed) / CGFloat(maxSpeed) * size.height)
-                            if index == 0 {
-                                path.move(to: CGPoint(x: x, y: y))
-                            } else {
-                                path.addLine(to: CGPoint(x: x, y: y))
+                if chartSamples.isEmpty {
+                    Text("Waiting for ride data")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Canvas { context, canvasSize in
+                        let guideFractions: [CGFloat] = [0.2, 0.4, 0.6, 0.8]
+                        for fraction in guideFractions {
+                            let y = canvasSize.height * fraction
+                            var guidePath = Path()
+                            guidePath.move(to: CGPoint(x: 0, y: y))
+                            guidePath.addLine(to: CGPoint(x: canvasSize.width, y: y))
+                            context.stroke(
+                                guidePath,
+                                with: .color(Color.white.opacity(0.05)),
+                                style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [3, 5])
+                            )
+                        }
+
+                        let sampleCount = max(chartSamples.count, 1)
+                        let slotWidth = canvasSize.width / CGFloat(sampleCount)
+                        let barWidth = max(2, slotWidth * 0.68)
+                        let sideWidth = max(1, barWidth * 0.2)
+
+                        for index in chartSamples.indices {
+                            let cadence = max(chartSamples[index].cadenceRpm, 0)
+                            let zoneColor = Self.cadenceZoneColor(for: cadence)
+                            let normalizedCadence = CGFloat(cadence / maxCadence)
+                            let barHeight = max(2, normalizedCadence * canvasSize.height)
+                            let x = CGFloat(index) * slotWidth + (slotWidth - barWidth) * 0.5
+                            let rect = CGRect(
+                                x: x,
+                                y: canvasSize.height - barHeight,
+                                width: barWidth,
+                                height: barHeight
+                            )
+
+                            let barBody = Path(roundedRect: rect, cornerRadius: min(3, barWidth * 0.35))
+                            context.fill(
+                                barBody,
+                                with: .linearGradient(
+                                    Gradient(colors: [
+                                        zoneColor.opacity(0.45),
+                                        zoneColor.opacity(0.95)
+                                    ]),
+                                    startPoint: CGPoint(x: rect.midX, y: rect.minY),
+                                    endPoint: CGPoint(x: rect.midX, y: rect.maxY)
+                                )
+                            )
+
+                            let sideRect = CGRect(
+                                x: rect.maxX - sideWidth,
+                                y: rect.minY + 1,
+                                width: sideWidth,
+                                height: max(1, rect.height - 1)
+                            )
+                            context.fill(
+                                Path(roundedRect: sideRect, cornerRadius: min(2, sideWidth)),
+                                with: .color(Color.black.opacity(0.18))
+                            )
+
+                            let highlightRect = CGRect(
+                                x: rect.minX + 1,
+                                y: rect.minY + 1,
+                                width: max(1, rect.width - sideWidth - 2),
+                                height: min(6, max(2, rect.height * 0.14))
+                            )
+                            context.fill(
+                                Path(roundedRect: highlightRect, cornerRadius: min(2, highlightRect.height * 0.5)),
+                                with: .color(Color.white.opacity(0.22))
+                            )
+                        }
+
+                        if chartSamples.count >= 2 {
+                            for index in 1..<chartSamples.count {
+                                let previous = chartSamples[index - 1]
+                                let current = chartSamples[index]
+
+                                let x0 = canvasSize.width * CGFloat(index - 1) / CGFloat(chartSamples.count - 1)
+                                let y0 = canvasSize.height - (CGFloat(previous.speedKph) / CGFloat(maxSpeed) * canvasSize.height)
+                                let x1 = canvasSize.width * CGFloat(index) / CGFloat(chartSamples.count - 1)
+                                let y1 = canvasSize.height - (CGFloat(current.speedKph) / CGFloat(maxSpeed) * canvasSize.height)
+
+                                var segment = Path()
+                                segment.move(to: CGPoint(x: x0, y: y0))
+                                segment.addLine(to: CGPoint(x: x1, y: y1))
+
+                                context.stroke(
+                                    segment,
+                                    with: .color(Color.black.opacity(0.3)),
+                                    style: StrokeStyle(lineWidth: 4.0, lineCap: .round, lineJoin: .round)
+                                )
+
+                                context.stroke(
+                                    segment,
+                                    with: .color(Self.cadenceZoneColor(for: max(current.cadenceRpm, 0))),
+                                    style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round)
+                                )
                             }
                         }
                     }
-                    .stroke(RideTheme.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-                    .animation(.easeInOut(duration: 0.35), value: speeds.count)
-                } else {
-                    Path { path in
-                        path.move(to: CGPoint(x: 0, y: size.height * 0.7))
-                        path.addLine(to: CGPoint(x: size.width, y: size.height * 0.7))
-                    }
-                    .stroke(RideTheme.track, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .animation(.easeInOut(duration: 0.25), value: chartSamples.count)
                 }
             }
         }
     }
+
+    private func tenSecondBuckets(from samples: [SpeedSample]) -> [SpeedSample] {
+        guard !samples.isEmpty else { return [] }
+        let bucketInterval: TimeInterval = 10
+        var buckets: [SpeedSample] = []
+
+        var currentBucketStart = floor(samples[0].timestamp.timeIntervalSinceReferenceDate / bucketInterval) * bucketInterval
+        var speedSum = 0.0
+        var cadenceSum = 0.0
+        var sampleCount = 0
+
+        func flushBucket() {
+            guard sampleCount > 0 else { return }
+            let bucketTimestamp = Date(timeIntervalSinceReferenceDate: currentBucketStart + (bucketInterval / 2))
+            buckets.append(
+                SpeedSample(
+                    timestamp: bucketTimestamp,
+                    speedKph: speedSum / Double(sampleCount),
+                    cadenceRpm: cadenceSum / Double(sampleCount)
+                )
+            )
+        }
+
+        for sample in samples {
+            let bucketStart = floor(sample.timestamp.timeIntervalSinceReferenceDate / bucketInterval) * bucketInterval
+            if bucketStart != currentBucketStart {
+                flushBucket()
+                currentBucketStart = bucketStart
+                speedSum = 0
+                cadenceSum = 0
+                sampleCount = 0
+            }
+            speedSum += sample.speedKph
+            cadenceSum += sample.cadenceRpm
+            sampleCount += 1
+        }
+
+        flushBucket()
+        return buckets
+    }
+
+    private static func cadenceZoneColor(for cadence: Double) -> Color {
+        if cadence > 110 {
+            return .red
+        }
+        if cadence < 30 {
+            return .white
+        }
+        if cadence < 50 {
+            return .blue
+        }
+        if cadence < 70 {
+            return .yellow
+        }
+        return .green
+    }
 }
 
-private struct SpeedHeatMap: View {
-    let samples: [SpeedSample]
-
+private struct CadenceLegendRow: View {
     var body: some View {
-        GeometryReader { _ in
-            let blockCount = 24
-            let speeds = samples.map(\.speedKph)
-            let maxSpeed = max(speeds.max() ?? 0, 1)
-            let values = heatValues(blockCount: blockCount, speeds: speeds)
-
-            HStack(spacing: 4) {
-                ForEach(0..<blockCount, id: \.self) { index in
-                    Rectangle()
-                        .fill(zoneColor(for: values[index], maxSpeed: maxSpeed))
-                        .cornerRadius(3)
-                        .animation(.easeInOut(duration: 0.35), value: values[index])
-                }
-            }
+        HStack(spacing: 10) {
+            legendItem(color: .white, label: "< 30")
+            legendItem(color: .blue, label: "30-50")
+            legendItem(color: .yellow, label: "50-70")
+            legendItem(color: .green, label: "70-110")
+            legendItem(color: .red, label: "> 110")
+            Spacer(minLength: 0)
+            Text("Bars are 10s cadence buckets")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
         }
     }
 
-    private func heatValues(blockCount: Int, speeds: [Double]) -> [Double] {
-        guard !speeds.isEmpty else { return Array(repeating: 0, count: blockCount) }
-        let strideCount = max(speeds.count / blockCount, 1)
-        return (0..<blockCount).map { index in
-            let start = index * strideCount
-            let end = min(start + strideCount, speeds.count)
-            guard start < end else { return 0 }
-            let slice = speeds[start..<end]
-            let sum = slice.reduce(0, +)
-            return sum / Double(slice.count)
-        }
-    }
-
-    private func zoneColor(for speed: Double, maxSpeed: Double) -> Color {
-        let normalized = maxSpeed > 0 ? speed / maxSpeed : 0
-        switch normalized {
-        case 0..<0.25:
-            return RideTheme.accent.opacity(0.2)
-        case 0.25..<0.5:
-            return RideTheme.accent.opacity(0.4)
-        case 0.5..<0.75:
-            return RideTheme.accent.opacity(0.65)
-        default:
-            return RideTheme.accent
+    private func legendItem(color: Color, label: String) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color.opacity(0.9))
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
         }
     }
 }
+
 
 private struct BottomBar: View {
     let avgSpeedText: String
@@ -925,7 +1288,6 @@ private struct BottomMetric: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
-
 
 struct ProfileSelectionView: View {
     @ObservedObject var store: ProfileStore
@@ -1010,13 +1372,15 @@ struct ProfileSelectionView: View {
                 }
             }
             .overlay(alignment: .top) {
-                if selectionRequired && store.activeProfileId == nil {
-                    Text("Select a profile to start a workout.")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 12)
-                        .allowsHitTesting(false)
+                VStack(spacing: 6) {
+                    if selectionRequired && store.activeProfileId == nil {
+                        Text("Select a profile to start a workout.")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                .padding(.top, 12)
+                .allowsHitTesting(false)
             }
         }
         .sheet(isPresented: $showEditor) {
@@ -1268,7 +1632,7 @@ private enum WorkoutState: String {
     case paused = "PAUSED"
 }
 
-private enum RideTheme {
+enum RideTheme {
     static let accentHex: UInt32 = 0xF06010
     static var surfaceOpacity: Double = 0
     static var background: Color { Color(hex: 0x0B0F14).opacity(surfaceOpacity) }
@@ -1307,7 +1671,7 @@ private struct CyclingBackground: View {
     }
 }
 
-private extension Color {
+extension Color {
     init(hex: UInt32, alpha: Double = 1) {
         let red = Double((hex >> 16) & 0xFF) / 255
         let green = Double((hex >> 8) & 0xFF) / 255

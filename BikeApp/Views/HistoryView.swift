@@ -1,205 +1,158 @@
+import Foundation
 import SwiftUI
 
 struct HistoryView: View {
-    @ObservedObject var store: WorkoutHistoryStore
-    let distanceUnit: String
-    let activeProfile: Profile?
+    @ObservedObject var historyStore: WorkoutHistoryStore
+    let profiles: [Profile]
+    let activeProfileId: UUID?
+
+    @State private var showActiveOnly: Bool = true
 
     var body: some View {
         NavigationStack {
             List {
-                if let activeProfile {
-                    let records = store.workouts.filter { $0.profileId == activeProfile.id }
-                    if records.isEmpty {
-                        ContentUnavailableView(
-                            "No workouts yet",
-                            systemImage: "clock",
-                            description: Text("Finish a ride for \(activeProfile.name).")
-                        )
-                    } else {
-                        ForEach(records) { record in
-                            NavigationLink(value: record.id) {
-                                WorkoutRow(record: record, distanceUnit: distanceUnit)
-                            }
-                        }
-                        .onDelete { offsets in
-                            let ids = offsets.map { records[$0].id }
-                            store.delete(ids: ids)
-                        }
+                if activeProfileId != nil {
+                    Section {
+                        Toggle("Active profile only", isOn: $showActiveOnly)
                     }
-                } else {
+                }
+
+                if filteredWorkouts.isEmpty {
                     ContentUnavailableView(
-                        "Select a profile",
-                        systemImage: "person.crop.circle",
-                        description: Text("Choose a profile to view workout history.")
+                        "No workouts yet",
+                        systemImage: "clock",
+                        description: Text("Complete a ride to see it here.")
                     )
+                    .listRowBackground(Color.clear)
+                } else {
+                    ForEach(filteredWorkouts) { record in
+                        HistoryWorkoutRow(
+                            record: record,
+                            profileName: profileName(for: record.profileId)
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    }
+                    .onDelete(perform: delete)
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .navigationTitle("History")
-            .navigationDestination(for: UUID.self) { recordID in
-                if let record = store.workouts.first(where: { $0.id == recordID }) {
-                    WorkoutDetailView(record: record, distanceUnit: distanceUnit)
-                } else {
-                    Text("Workout not found")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    EditButton()
+                }
+            }
+            .background(RideTheme.background)
+        }
+    }
+
+    private var filteredWorkouts: [WorkoutRecord] {
+        guard showActiveOnly, let activeProfileId else { return historyStore.workouts }
+        return historyStore.workouts.filter { $0.profileId == activeProfileId }
+    }
+
+    private func profileName(for id: UUID?) -> String? {
+        guard let id else { return nil }
+        return profiles.first(where: { $0.id == id })?.name
+    }
+
+    private func delete(at offsets: IndexSet) {
+        let ids = offsets.map { filteredWorkouts[$0].id }
+        historyStore.delete(ids: ids)
+    }
+}
+
+private struct HistoryWorkoutRow: View {
+    let record: WorkoutRecord
+    let profileName: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(dateLabel)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                Spacer()
+                Text(distanceLabel)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(RideTheme.accent)
+            }
+
+            HStack(spacing: 8) {
+                Text(durationLabel)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                if let profileName {
+                    Text("|")
+                        .foregroundStyle(.secondary)
+                    Text(profileName)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
             }
-            .toolbar {
-                EditButton()
+
+            if let trackName = record.trackName, let trackDistance = record.trackDistanceKm {
+                HStack(spacing: 8) {
+                    Text("Track: \(trackName)")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("\(String(format: "%.1f km", trackDistance))")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let trackProgress = record.trackProgressMeters, trackProgress > 0, trackProgress < (trackDistance * 1000.0) {
+                    Text("\(String(format: "%.1f km", trackProgress / 1000.0)) ridden on track")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let trackCompleted = record.trackCompleted {
+                    Text(trackCompleted ? "Completed" : "Incomplete")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(trackCompleted ? Color.green : Color.orange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule()
+                                .fill(RideTheme.surface(trackCompleted ? Color.green : Color.orange, opacity: 0.18))
+                        )
+                }
             }
         }
-    }
-}
-
-private struct WorkoutRow: View {
-    let record: WorkoutRecord
-    let distanceUnit: String
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(DateFormatter.workoutDate.string(from: record.startDate))
-                    .font(.system(size: 16, weight: .semibold))
-                Text(timeText)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(distanceText)
-                    .font(.system(size: 16, weight: .semibold))
-                Text(speedText)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(RideTheme.card)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
         .padding(.vertical, 6)
     }
 
-    private var timeText: String {
-        DateComponentsFormatter.workoutDuration.string(from: record.elapsedSeconds) ?? "--:--"
-    }
-
-    private var distanceText: String {
-        let value = distanceUnit == "mi"
-            ? record.distanceMeters / 1609.344
-            : record.distanceMeters / 1000.0
-        let unit = distanceUnit == "mi" ? "mi" : "km"
-        return String(format: "%.2f %@", value, unit)
-    }
-
-    private var speedText: String {
-        guard record.elapsedSeconds > 0 else { return "0.0 \(speedUnit)" }
-        let kph = (record.distanceMeters / record.elapsedSeconds) * 3.6
-        let value = distanceUnit == "mi" ? kph / 1.609344 : kph
-        return String(format: "Avg %.1f %@", value, speedUnit)
-    }
-
-    private var speedUnit: String {
-        distanceUnit == "mi" ? "mph" : "km/h"
-    }
-}
-
-private struct WorkoutDetailView: View {
-    let record: WorkoutRecord
-    let distanceUnit: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(DateFormatter.workoutDateTime.string(from: record.startDate))
-                    .font(.system(size: 22, weight: .semibold))
-                Text("Finished \(DateFormatter.workoutTime.string(from: record.endDate))")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 16) {
-                DetailMetric(title: "Duration", value: durationText)
-                DetailMetric(title: "Distance", value: distanceText)
-                DetailMetric(title: "Avg Speed", value: speedText)
-            }
-
-            Spacer()
-        }
-        .padding(24)
-        .navigationTitle("Workout")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private var durationText: String {
-        DateComponentsFormatter.workoutDuration.string(from: record.elapsedSeconds) ?? "--:--"
-    }
-
-    private var distanceText: String {
-        let value = distanceUnit == "mi"
-            ? record.distanceMeters / 1609.344
-            : record.distanceMeters / 1000.0
-        let unit = distanceUnit == "mi" ? "mi" : "km"
-        return String(format: "%.2f %@", value, unit)
-    }
-
-    private var speedText: String {
-        guard record.elapsedSeconds > 0 else { return "0.0 \(speedUnit)" }
-        let kph = (record.distanceMeters / record.elapsedSeconds) * 3.6
-        let value = distanceUnit == "mi" ? kph / 1.609344 : kph
-        return String(format: "%.1f %@", value, speedUnit)
-    }
-
-    private var speedUnit: String {
-        distanceUnit == "mi" ? "mph" : "km/h"
-    }
-}
-
-private struct DetailMetric: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 20, weight: .semibold))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.secondarySystemBackground))
-        )
-    }
-}
-
-private extension DateFormatter {
-    static let workoutDate: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter
-    }()
-
-    static let workoutDateTime: DateFormatter = {
+    private var dateLabel: String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-        return formatter
-    }()
+        return formatter.string(from: record.startDate)
+    }
 
-    static let workoutTime: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        return formatter
-    }()
-}
+    private var durationLabel: String {
+        let totalSeconds = max(0, Int(record.elapsedSeconds.rounded()))
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return String(format: "Duration %02d:%02d", minutes, seconds)
+    }
 
-private extension DateComponentsFormatter {
-    static let workoutDuration: DateComponentsFormatter = {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.hour, .minute, .second]
-        formatter.zeroFormattingBehavior = [.pad]
-        return formatter
-    }()
+    private var distanceLabel: String {
+        let km = record.distanceMeters / 1000.0
+        return String(format: "%.2f km", km)
+    }
 }

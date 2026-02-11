@@ -12,6 +12,7 @@ struct SpeedSample: Identifiable {
     let id = UUID()
     let timestamp: Date
     let speedKph: Double
+    let cadenceRpm: Double
 }
 
 struct PerformanceStats {
@@ -35,8 +36,6 @@ final class WorkoutSession: ObservableObject {
     private var lastTickDate: Date?
     private(set) var startDate: Date?
     private(set) var endDate: Date?
-    private let sampleWindow: TimeInterval = 10 * 60
-
     var lastTenMinuteStats: PerformanceStats {
         guard speedSamples.count >= 2 else {
             return PerformanceStats(averageSpeedKph: 0, distanceMeters: 0, duration: 0)
@@ -167,10 +166,12 @@ final class WorkoutSession: ObservableObject {
     }
 
     private func recordSpeedSample(at timestamp: Date) {
-        speedSamples.append(SpeedSample(timestamp: timestamp, speedKph: speedKph))
-        let cutoff = timestamp.addingTimeInterval(-sampleWindow)
-        while let first = speedSamples.first, first.timestamp < cutoff {
-            speedSamples.removeFirst()
-        }
+        speedSamples.append(
+            SpeedSample(
+                timestamp: timestamp,
+                speedKph: speedKph,
+                cadenceRpm: cadenceRpm
+            )
+        )
     }
 }
